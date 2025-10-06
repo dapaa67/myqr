@@ -5,9 +5,9 @@ date_default_timezone_set('Asia/Jakarta');
 session_start();
 
 define('DB_HOST', 'localhost');
-define('DB_USER', 'u822465743_user');
-define('DB_PASS', 'Absen1..');
-define('DB_NAME', 'u822465743_absen');
+define('DB_USER', 'root');
+define('DB_PASS', '');
+define('DB_NAME', 'myqr');
 
 $conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
 
