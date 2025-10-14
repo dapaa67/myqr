@@ -21,6 +21,7 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'user') {
     $stmt_token->bind_param("s", $token);
     $stmt_token->execute();
     $token_result = $stmt_token->get_result();
+    $stmt_token->close();
 
     if ($token_result->num_rows === 0) {
         $response['message'] = 'QR Code tidak valid atau sudah kedaluwarsa.';
@@ -30,11 +31,13 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'user') {
         $stmt_jadwal->bind_param("i", $user_id);
         $stmt_jadwal->execute();
         $jadwal_result = $stmt_jadwal->get_result();
+        $stmt_jadwal->close();
 
         if ($jadwal_result->num_rows === 0) {
             $response['message'] = 'Anda belum memiliki jadwal shift. Hubungi admin.';
         } else {
             $jadwal = $jadwal_result->fetch_assoc();
+            $jam_masuk = $jadwal['jam_masuk'];
             $batas_jam_masuk = $jadwal['batas_jam_masuk'];
             $jam_pulang = $jadwal['jam_pulang'];
 
@@ -43,34 +46,72 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'user') {
             $stmt_absensi->bind_param("is", $user_id, $today);
             $stmt_absensi->execute();
             $data_absensi_hari_ini = $stmt_absensi->get_result()->fetch_assoc();
+            $stmt_absensi->close();
+
+            $absenBerhasil = false;
+            $conn->begin_transaction(); // Mulai transaksi
 
             if (!$data_absensi_hari_ini) {
                 // KASUS 1: ABSEN MASUK
-                $status_masuk = ($currentTime > $batas_jam_masuk) ? 'Terlambat' : 'Tepat Waktu';
-                $stmt_insert = $conn->prepare("INSERT INTO absensi (user_id, tanggal_absensi, waktu_masuk, status_masuk) VALUES (?, ?, ?, ?)");
-                $stmt_insert->bind_param("isss", $user_id, $today, $currentTime, $status_masuk);
-                if ($stmt_insert->execute()) {
-                    $_SESSION['toast'] = ['message' => 'Absen MASUK berhasil dicatat pukul ' . $currentTime, 'type' => 'success'];
-                    $conn->query("DELETE FROM qr_tokens WHERE token = '$token'");
-                    $response = ['success' => true];
+
+                // Validasi waktu absen masuk
+                if ($currentTime < $jam_masuk) {
+                    $response['message'] = 'Waktu absen masuk belum dimulai. Anda dapat absen mulai dari jam ' . $jam_masuk . '.';
+                    $conn->rollback(); // Batalkan transaksi karena tidak ada perubahan
                 } else {
-                    $response['message'] = 'Gagal menyimpan data absen masuk.';
+                    $status_masuk = ($currentTime > $batas_jam_masuk) ? 'Terlambat' : 'Tepat Waktu';
+                    $stmt_insert = $conn->prepare("INSERT INTO absensi (user_id, tanggal_absensi, waktu_masuk, status_masuk) VALUES (?, ?, ?, ?)");
+                    $stmt_insert->bind_param("isss", $user_id, $today, $currentTime, $status_masuk);
+                    if ($absenBerhasil = $stmt_insert->execute()) {
+                        $_SESSION['toast'] = ['message' => 'Absen MASUK berhasil dicatat pukul ' . $currentTime, 'type' => 'success'];
+                        $response = ['success' => true];
+                    } else {
+                        $response['message'] = 'Gagal menyimpan data absen masuk.';
+                    }
+                    $stmt_insert->close();
                 }
             } elseif ($data_absensi_hari_ini['waktu_masuk'] && !$data_absensi_hari_ini['waktu_keluar']) {
                 // KASUS 2: ABSEN PULANG
-                $status_keluar = ($currentTime < $jam_pulang) ? 'Pulang Cepat' : 'Selesai';
+                $batas_pulang_cepat = date('H:i:s', strtotime($jam_pulang . ' -1 hour'));
+                $batas_lembur = date('H:i:s', strtotime($jam_pulang . ' +2 hours'));
+
+                if ($currentTime < $batas_pulang_cepat) {
+                    $status_keluar = 'Pulang Cepat';
+                } elseif ($currentTime > $batas_lembur) {
+                    $status_keluar = 'Lembur';
+                } else {
+                    $status_keluar = 'Selesai';
+                }
+
                 $stmt_update = $conn->prepare("UPDATE absensi SET waktu_keluar = ?, status_keluar = ? WHERE id = ?");
                 $stmt_update->bind_param("ssi", $currentTime, $status_keluar, $data_absensi_hari_ini['id']);
-                if ($stmt_update->execute()) {
+                if ($absenBerhasil = $stmt_update->execute()) {
                     $_SESSION['toast'] = ['message' => 'Absen PULANG berhasil dicatat pukul ' . $currentTime, 'type' => 'success'];
-                    $conn->query("DELETE FROM qr_tokens WHERE token = '$token'");
                     $response = ['success' => true];
                 } else {
                     $response['message'] = 'Gagal menyimpan data absen pulang.';
                 }
+                $stmt_update->close();
             } else {
                 // KASUS 3: SUDAH LENGKAP
                 $response['message'] = 'Anda sudah menyelesaikan absensi hari ini.';
+            }
+
+            // Jika absensi (masuk atau pulang) berhasil, hapus token
+            if ($absenBerhasil) {
+                $stmt_delete = $conn->prepare("DELETE FROM qr_tokens WHERE token = ?");
+                $stmt_delete->bind_param("s", $token);
+                // Jika penghapusan token juga berhasil, commit transaksi
+                if ($stmt_delete->execute()) {
+                    $conn->commit();
+                } else {
+                    $conn->rollback(); // Batalkan jika hapus token gagal
+                    $response = ['success' => false, 'message' => 'Gagal memvalidasi token setelah absen.'];
+                }
+                $stmt_delete->close();
+            } else {
+                // Jika absen gagal, batalkan semua perubahan
+                $conn->rollback();
             }
         }
     }
@@ -82,5 +123,6 @@ ob_clean();
 // Kirim balasan JSON yang bersih
 header('Content-Type: application/json');
 echo json_encode($response);
+$conn->close();
 exit();
 ?>

@@ -3,9 +3,30 @@
 </div>
 
 <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/toastify-js"></script>
+<!-- Tambahkan SweetAlert2 untuk dialog konfirmasi yang lebih baik -->
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
 <script>
-// Logika Notifikasi Toastify (tetap sama)
-<?php if (isset($_SESSION['toast'])) { /* ... kode toastify ... */ } ?>
+<?php
+if (isset($_SESSION['toast'])) {
+    $toast = $_SESSION['toast'];
+    // Gunakan json_encode untuk menangani karakter khusus dengan aman
+    $message = json_encode($toast['message']); 
+    $type = $toast['type'];
+    $borderLeftColor = ($type === 'success') ? '#28a745' : '#dc3545';
+
+    echo "
+    document.addEventListener('DOMContentLoaded', function() {
+        Toastify({
+            text: $message, duration: 3000, close: true, gravity: 'bottom', position: 'right', stopOnFocus: true,
+            style: { background: '#ffffff', color: '#333333', borderRadius: '8px', borderLeft: '5px solid $borderLeftColor', boxShadow: '0 3px 6px -1px rgba(0, 0, 0, 0.12), 0 10px 36px -4px rgba(77, 96, 232, 0.15)' },
+            offset: { x: 20, y: 20 }
+        }).showToast();
+    });
+    ";
+    unset($_SESSION['toast']); // Hapus pesan setelah ditampilkan
+}
+?>
 
 // --- JAVASCRIPT BARU UNTUK STRUKTUR BARU ---
 const sidebar = document.getElementById('sidebar');

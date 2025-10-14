@@ -7,29 +7,31 @@ $setting_result = $conn->query("SELECT setting_value FROM settings WHERE setting
 $current_interval = ($setting_result && $setting_result->num_rows > 0) ? $setting_result->fetch_assoc()['setting_value'] : 5;
 
 $today = date("Y-m-d");
-$q_absensi = "SELECT u.nama_lengkap, a.waktu_masuk, a.status_masuk, a.waktu_keluar, a.status_keluar FROM absensi a JOIN users u ON a.user_id = u.id WHERE a.tanggal_absensi = '$today' ORDER BY a.waktu_masuk DESC";
-$result_absensi = $conn->query($q_absensi);
+// Gunakan prepared statement untuk keamanan dan konsistensi
+$stmt_absensi = $conn->prepare("SELECT u.nama_lengkap, a.waktu_masuk, a.status_masuk, a.waktu_keluar, a.status_keluar FROM absensi a JOIN users u ON a.user_id = u.id WHERE a.tanggal_absensi = ? ORDER BY a.waktu_masuk DESC");
+$stmt_absensi->bind_param("s", $today);
+$stmt_absensi->execute();
+$result_absensi = $stmt_absensi->get_result();
 ?>
 
 <div class="max-w-7xl mx-auto py-8 sm:px-6 lg:px-8">
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div class="lg:col-span-1 bg-white p-6 rounded-xl shadow-lg border border-gray-200">
             <h2 class="text-xl font-bold mb-4 text-slate-800">QR Code Absensi</h2>
-            <div id="qr-code-container" class="flex justify-center items-center h-64 bg-gray-200/50 rounded-lg overflow-hidden cursor-pointer" title="Klik untuk perbesar">
+            <div id="qr-code-container" class="flex flex-col justify-center items-center h-auto bg-gray-200/50 rounded-lg p-4">
                 <span class="text-gray-500">Memuat QR Code...</span>
             </div>
 
-            <div class="mt-4">
-                <label class="text-xs font-bold text-gray-500 uppercase">Data Token Saat Ini:</label>
-                <div id="token-display" class="mt-1 font-mono text-sm break-all bg-gray-100 p-2 rounded border">
-                    -
-                </div>
+            <!-- Penampilan Token untuk Input Manual -->
+            <div id="manual-code-display" class="text-center mt-4 hidden">
+                <h3 class="text-sm font-semibold text-slate-600">Atau Masukkan Kode:</h3>
+                <p id="token-display" class="text-4xl font-bold text-slate-800 tracking-widest py-2"></p>
             </div>
             
             <button id="download-btn" class="hidden mt-4 w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg transition-colors">
                 Download QR Code
             </button>
-            <p id="interval-text" class="text-sm text-gray-500 mt-4 text-center">QR Code diperbarui setiap <?php echo $current_interval; ?> menit.</p>
+            <p id="interval-text" class="text-sm text-gray-500 mt-4 text-center" data-interval-minutes="<?php echo $current_interval; ?>">QR Code diperbarui setiap <?php echo $current_interval; ?> menit.</p>
 
             <form action="proses_interval.php" method="POST" class="mt-4 border-t border-gray-200 pt-4">
                 <label for="interval-input" class="block text-sm font-medium text-gray-700 mb-1">Ubah Interval (menit)</label>
@@ -100,39 +102,27 @@ $result_absensi = $conn->query($q_absensi);
     function fetchQrCode() {
         const qrContainer = document.getElementById('qr-code-container');
         const tokenDisplay = document.getElementById('token-display');
+        const manualCodeDisplay = document.getElementById('manual-code-display');
         const downloadBtn = document.getElementById('download-btn');
 
-        if (!qrContainer || !tokenDisplay || !downloadBtn) {
-            console.error('Elemen UI penting tidak ditemukan!');
-            return;
-        }
-
-        qrContainer.innerHTML = '<span class="text-gray-500">Memuat QR Code...</span>';
-        tokenDisplay.textContent = '...';
-        downloadBtn.classList.add('hidden');
-
         fetch('generate_qr.php')
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error('Network response was not ok: ' + response.statusText);
-                }
-                return response.json();
-            })
+            .then(response => response.json())
             .then(data => {
                 if (data && data.token && data.dataUri) {
                     currentQrDataUri = data.dataUri; 
-                    qrContainer.innerHTML = `<img src="${data.dataUri}" alt="QR Code Absensi">`;
-                    tokenDisplay.textContent = data.token;
+                    qrContainer.innerHTML = `<img src="${data.dataUri}" alt="QR Code Absensi" class="w-64 h-64 cursor-pointer" title="Klik untuk perbesar">`;
+                    
+                    tokenDisplay.textContent = data.token.match(/.{1,3}/g).join('-'); // Format token: 123-456
+                    manualCodeDisplay.classList.remove('hidden');
+
                     downloadBtn.classList.remove('hidden');
                 } else {
-                    qrContainer.innerHTML = '<span class="text-red-500">Gagal memuat data QR dari JSON.</span>';
-                    tokenDisplay.textContent = 'Format JSON tidak sesuai.';
+                    qrContainer.innerHTML = '<span class="text-red-500">Gagal memuat QR Code.</span>';
                 }
             })
             .catch(error => {
-                console.error('Gagal memuat atau memproses QR Code:', error);
+                console.error('Gagal memuat QR Code:', error);
                 qrContainer.innerHTML = `<span class="text-red-500">Error! Cek Console (F12).</span>`;
-                tokenDisplay.textContent = 'Error: ' + error.message;
             });
     }
 
@@ -159,9 +149,10 @@ $result_absensi = $conn->query($q_absensi);
     // Jalankan fetch pertama kali
     fetchQrCode();
     // Atur interval
-    const intervalMinutes = <?php echo $current_interval; ?>;
-    const intervalMilliseconds = intervalMinutes * 60 * 1000;
-    setInterval(fetchQrCode, intervalMilliseconds);
+    const intervalText = document.getElementById('interval-text');
+    const intervalMinutes = intervalText.dataset.intervalMinutes || 5; // Fallback ke 5 menit
+    const intervalMilliseconds = parseInt(intervalMinutes) * 60 * 1000;
+    if (intervalMilliseconds > 0) setInterval(fetchQrCode, intervalMilliseconds);
 </script>
 
 <?php require_once __DIR__ . '/../layouts/footer.php'; ?>

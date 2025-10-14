@@ -34,6 +34,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['token'])) {
         exit;
     }
     $jadwal = $jadwal_result->fetch_assoc();
+    $jam_masuk = $jadwal['jam_masuk'];
     $batas_jam_masuk = $jadwal['batas_jam_masuk'];
     $jam_pulang = $jadwal['jam_pulang'];
     $stmt_jadwal->close();
@@ -47,23 +48,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['token'])) {
 
     if (!$data_absensi_hari_ini) {
         // ABSEN MASUK
+
+        // Validasi waktu absen masuk
+        if ($currentTime < $jam_masuk) {
+            $_SESSION['toast'] = ['message' => 'Waktu absen masuk belum dimulai. Anda dapat absen mulai dari jam ' . $jam_masuk . '.', 'type' => 'error'];
+            header('Location: index.php');
+            exit;
+        }
+
         $status_masuk = ($currentTime > $batas_jam_masuk) ? 'Terlambat' : 'Tepat Waktu';
         $stmt_insert = $conn->prepare("INSERT INTO absensi (user_id, tanggal_absensi, waktu_masuk, status_masuk) VALUES (?, ?, ?, ?)");
         $stmt_insert->bind_param("isss", $user_id, $today, $currentTime, $status_masuk);
         if ($stmt_insert->execute()) {
             $_SESSION['toast'] = ['message' => 'Absen MASUK berhasil dicatat!', 'type' => 'success'];
-            $conn->query("DELETE FROM qr_tokens WHERE token = '$token'");
+            $stmt_delete = $conn->prepare("DELETE FROM qr_tokens WHERE token = ?");
+            $stmt_delete->bind_param("s", $token);
+            $stmt_delete->execute();
         }
         $stmt_insert->close();
 
     } elseif ($data_absensi_hari_ini['waktu_masuk'] && !$data_absensi_hari_ini['waktu_keluar']) {
         // ABSEN PULANG
-        $status_keluar = ($currentTime < $jam_pulang) ? 'Pulang Cepat' : 'Selesai';
+        $batas_pulang_cepat = date('H:i:s', strtotime($jam_pulang . ' -1 hour'));
+        $batas_lembur = date('H:i:s', strtotime($jam_pulang . ' +2 hours'));
+
+        if ($currentTime < $batas_pulang_cepat) {
+            $status_keluar = 'Pulang Cepat';
+        } elseif ($currentTime > $batas_lembur) {
+            $status_keluar = 'Lembur';
+        } else {
+            $status_keluar = 'Selesai';
+        }
+
         $stmt_update = $conn->prepare("UPDATE absensi SET waktu_keluar = ?, status_keluar = ? WHERE id = ?");
         $stmt_update->bind_param("ssi", $currentTime, $status_keluar, $data_absensi_hari_ini['id']);
         if ($stmt_update->execute()) {
             $_SESSION['toast'] = ['message' => 'Absen PULANG berhasil dicatat!', 'type' => 'success'];
-            $conn->query("DELETE FROM qr_tokens WHERE token = '$token'");
+            $stmt_delete = $conn->prepare("DELETE FROM qr_tokens WHERE token = ?");
+            $stmt_delete->bind_param("s", $token);
+            $stmt_delete->execute();
         }
         $stmt_update->close();
     } else {
